@@ -1,0 +1,62 @@
+name: Deployment Workflow
+
+
+env:
+  # Use the same ssh-agent socket value across all jobs
+  # Useful when a GH action is using SSH behind-the-scenes
+  SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+
+
+# Trigger this workflow on pushes to the specified branch
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Next.js app
+        run: npm run build
+
+      # Start ssh-agent but set it to use the same ssh_auth_sock value.
+      # The agent will be running in all steps after this, so it
+      # should be one of the first.
+      - name: Setup SSH passphrase
+        env:
+          SSH_PASSPHRASE: ${{secrets.SSH_PASSPHRASE}}
+          SSH_PRIVATE_KEY: ${{secrets.SSH_PRIVATE_KEY}}
+        run: |
+          ssh-agent -a $SSH_AUTH_SOCK > /dev/null
+          echo 'echo $SSH_PASSPHRASE' > ~/.ssh_askpass && chmod +x ~/.ssh_askpass
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' | DISPLAY=None SSH_ASKPASS=~/.ssh_askpass ssh-add - >/dev/null
+
+      - name: SSH Deploy
+        # Use the 'appleboy/ssh-action' action for SSH deployment
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }} # Your server's IP address
+          username: ${{ secrets.USERNAME }} # Your server's username
+          key: ${{ secrets.SSH_PRIVATE_KEY }} # Your server's SSH private key
+          passphrase: ${{ secrets.SSH_PASSPHRASE }} # Your SSH passphrase
+          port: 7317 # Your server's SSH port
+          script: |
+            cd ~/consultabitv2 # Specify the path to your app directory on the server
+            GIT_SSH_COMMAND="ssh -v" git fetch
+            GIT_SSH_COMMAND="ssh -v" git pull origin main
+
+            # Source NVM
+            . ~/.nvm/nvm.sh
+            nvm use stable
+            npm install
+            npm run build
+            pm2 delete "npm run start"
+            pm2 start "npm run start"
